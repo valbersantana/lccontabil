@@ -13,6 +13,8 @@ def processar_arquivos_em_memoria(arquivos_xml, arquivo_planilha, log_callback, 
     """
     # --- Leitura da planilha ---
     try:
+        # Reset do ponteiro do arquivo (necessário para UploadedFile do Streamlit)
+        arquivo_planilha.seek(0)
         df_funcionarios = pd.read_excel(arquivo_planilha, engine='openpyxl')
 
         colunas_necessarias = ['CPF', 'Nome', 'Setor']
@@ -48,7 +50,13 @@ def processar_arquivos_em_memoria(arquivos_xml, arquivo_planilha, log_callback, 
         for arquivo in arquivos_xml:
             nome_arquivo = arquivo.name
             try:
+                # Reset do ponteiro (necessário para UploadedFile do Streamlit)
+                arquivo.seek(0)
                 conteudo = arquivo.read()
+
+                if not conteudo:
+                    log_callback('warning', f"⚠️ Arquivo vazio: {nome_arquivo}")
+                    continue
 
                 # Parse do XML
                 parser = etree.XMLParser(recover=True, encoding='utf-8')
@@ -77,7 +85,9 @@ def processar_arquivos_em_memoria(arquivos_xml, arquivo_planilha, log_callback, 
                         log_callback('success', f"✅ Sucesso: {nome_arquivo} -> {setor_limpo}")
                         arquivos_com_sucesso += 1
                     else:
-                        log_callback('warning', f"⚠️ CPF {cpf_xml} não encontrado na planilha ({nome_arquivo}).")
+                        # Log de diagnóstico para facilitar depuração
+                        cpfs_planilha = df_funcionarios['CPF'].head(3).tolist()
+                        log_callback('warning', f"⚠️ CPF {cpf_xml} não encontrado ({nome_arquivo}). Exemplos na planilha: {cpfs_planilha}")
                 else:
                     log_callback('warning', f"⚠️ Tag <{tag_cpf}> ausente no arquivo {nome_arquivo}.")
 
