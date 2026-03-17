@@ -1,107 +1,90 @@
 import pandas as pd
 from lxml import etree
-import traceback
 import re
 import io
 import zipfile
 
 
-def processar_arquivos_em_memoria(arquivos_xml, arquivo_planilha, log_callback, tag_cpf):
+def processar_arquivos_em_memoria(xml_bytes_list, planilha_bytes, log_callback, tag_cpf):
     """
-    Lê arquivos XML em memória, busca o CPF, encontra os dados na planilha
-    e retorna um arquivo ZIP em memória com os XMLs organizados por setor.
+    Recebe lista de dicts {"nome": str, "conteudo": bytes} e um BytesIO da planilha.
+    Retorna bytes do ZIP com XMLs organizados por setor.
     """
     # --- Leitura da planilha ---
     try:
-        # Reset do ponteiro do arquivo (necessário para UploadedFile do Streamlit)
-        arquivo_planilha.seek(0)
-        df_funcionarios = pd.read_excel(arquivo_planilha, engine='openpyxl')
+        df = pd.read_excel(planilha_bytes, engine='openpyxl')
 
         colunas_necessarias = ['CPF', 'Nome', 'Setor']
-        colunas_faltantes = [col for col in colunas_necessarias if col not in df_funcionarios.columns]
-
-        if colunas_faltantes:
-            log_callback('error', f"❌ ERRO: Colunas faltantes na planilha: {', '.join(colunas_faltantes)}")
+        faltantes = [c for c in colunas_necessarias if c not in df.columns]
+        if faltantes:
+            log_callback('error', f"❌ Colunas faltantes na planilha: {', '.join(faltantes)}")
             return None
 
-        df_funcionarios['CPF'] = (
-            df_funcionarios['CPF']
-            .astype(str)
-            .str.replace(r'\D', '', regex=True)
-            .str.zfill(11)
-        )
-        log_callback('info', f"📄 Planilha carregada com {len(df_funcionarios)} registros.")
+        df['CPF'] = df['CPF'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(11)
+        log_callback('info', f"📄 Planilha carregada: {len(df)} registros.")
 
     except Exception as e:
-        log_callback('error', f"❌ ERRO CRÍTICO ao ler a planilha: {str(e)}")
+        log_callback('error', f"❌ Erro ao ler a planilha: {str(e)}")
         return None
 
-    if not arquivos_xml:
+    if not xml_bytes_list:
         log_callback('warning', "⚠️ Nenhum arquivo XML enviado.")
         return None
 
-    log_callback('info', f"📊 Processando {len(arquivos_xml)} arquivos...")
+    log_callback('info', f"📊 Processando {len(xml_bytes_list)} arquivo(s)...")
 
-    # --- Criação do ZIP em memória ---
     zip_buffer = io.BytesIO()
-    arquivos_com_sucesso = 0
+    sucesso = 0
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for arquivo in arquivos_xml:
-            nome_arquivo = arquivo.name
-            try:
-                # Reset do ponteiro (necessário para UploadedFile do Streamlit)
-                arquivo.seek(0)
-                conteudo = arquivo.read()
+        for item in xml_bytes_list:
+            nome_arquivo = item['nome']
+            conteudo = item['conteudo']
 
+            try:
                 if not conteudo:
                     log_callback('warning', f"⚠️ Arquivo vazio: {nome_arquivo}")
                     continue
 
-                # Parse do XML
                 parser = etree.XMLParser(recover=True, encoding='utf-8')
-                tree = etree.parse(io.BytesIO(conteudo), parser)
-                root = tree.getroot()
+                root = etree.parse(io.BytesIO(conteudo), parser).getroot()
 
-                # Busca dinâmica da tag CPF
-                xpath_query = f"//*[local-name()='{tag_cpf}']/text()"
-                elementos_cpf = root.xpath(xpath_query)
+                elementos = root.xpath(f"//*[local-name()='{tag_cpf}']/text()")
 
-                if elementos_cpf:
-                    cpf_xml = ''.join(c for c in elementos_cpf[0] if c.isdigit()).zfill(11)
-                    info_func = df_funcionarios.loc[df_funcionarios['CPF'] == cpf_xml]
+                if not elementos:
+                    log_callback('warning', f"⚠️ Tag <{tag_cpf}> ausente em: {nome_arquivo}")
+                    continue
 
-                    if not info_func.empty:
-                        nome_func = str(info_func['Nome'].iloc[0])
-                        setor_func = str(info_func['Setor'].iloc[0])
+                cpf_xml = ''.join(c for c in elementos[0] if c.isdigit()).zfill(11)
+                registro = df.loc[df['CPF'] == cpf_xml]
 
-                        nome_limpo = sanitizar_nome_arquivo(nome_func)
-                        setor_limpo = sanitizar_nome_arquivo(setor_func)
+                if registro.empty:
+                    log_callback('warning', f"⚠️ CPF {cpf_xml} não encontrado ({nome_arquivo})")
+                    continue
 
-                        # Estrutura dentro do ZIP: Setor/arquivo_Nome.xml
-                        novo_nome = f"{setor_limpo}/{nome_arquivo.rsplit('.', 1)[0]}_{nome_limpo[:50]}.xml"
-                        zf.writestr(novo_nome, conteudo)
+                nome_func = sanitizar(str(registro['Nome'].iloc[0]))
+                setor_func = sanitizar(str(registro['Setor'].iloc[0]))
 
-                        log_callback('success', f"✅ Sucesso: {nome_arquivo} -> {setor_limpo}")
-                        arquivos_com_sucesso += 1
-                    else:
-                        # Log de diagnóstico para facilitar depuração
-                        cpfs_planilha = df_funcionarios['CPF'].head(3).tolist()
-                        log_callback('warning', f"⚠️ CPF {cpf_xml} não encontrado ({nome_arquivo}). Exemplos na planilha: {cpfs_planilha}")
-                else:
-                    log_callback('warning', f"⚠️ Tag <{tag_cpf}> ausente no arquivo {nome_arquivo}.")
+                nome_base = nome_arquivo.rsplit('.', 1)[0]
+                caminho_zip = f"{setor_func}/{nome_base}_{nome_func[:50]}.xml"
+                zf.writestr(caminho_zip, conteudo)
+
+                log_callback('success', f"✅ {nome_arquivo} → {setor_func}")
+                sucesso += 1
 
             except Exception as e:
-                log_callback('error', f"❌ Falha no arquivo {nome_arquivo}: {str(e)}")
+                log_callback('error', f"❌ Falha em {nome_arquivo}: {str(e)}")
 
-    log_callback('info', f"📈 Fim: {arquivos_com_sucesso} arquivos organizados.")
+    log_callback('info', f"📈 Concluído: {sucesso} arquivo(s) organizados.")
+
+    if sucesso == 0:
+        return None
 
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
 
-def sanitizar_nome_arquivo(texto):
-    """Remove caracteres proibidos e limita o tamanho."""
+def sanitizar(texto):
     if pd.isna(texto) or str(texto).strip() == "":
         return "Nao_Identificado"
     texto = re.sub(r'[<>:"/\\|?*]', '', str(texto))
