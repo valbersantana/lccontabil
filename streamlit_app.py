@@ -1,7 +1,7 @@
 import streamlit as st
 import io
 
-# Teste de import com mensagem clara de erro
+# Teste de import
 try:
     from processador import processar_arquivos_em_memoria
     IMPORT_OK = True
@@ -12,17 +12,13 @@ except ImportError as e:
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Processador de XMLs", page_icon="📁", layout="wide")
 
-# --- Verificação de Import ---
 if not IMPORT_OK:
     st.error(f"❌ Erro ao importar processador.py: {IMPORT_ERROR}")
-    st.info("Verifique se o arquivo processador.py no GitHub contém a função 'processar_arquivos_em_memoria'")
     st.stop()
 
-# --- Título e Descrição ---
 st.title("📁 Processador e Organizador de Arquivos XML")
 st.markdown("---")
 
-# --- Interface Principal ---
 col1, col2 = st.columns(2)
 
 with col1:
@@ -30,9 +26,14 @@ with col1:
     arquivos_xml = st.file_uploader(
         "Carregue os arquivos XML para processar",
         type=['xml'],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="uploader_xml"
     )
+    # Salva conteúdo dos XMLs no session_state IMEDIATAMENTE após upload
     if arquivos_xml:
+        st.session_state['xml_bytes'] = [
+            {"nome": f.name, "conteudo": f.read()} for f in arquivos_xml
+        ]
         st.success(f"✅ {len(arquivos_xml)} arquivo(s) XML carregado(s).")
 
     st.subheader("🏷️ 2. Tag do CPF no XML")
@@ -46,24 +47,27 @@ with col2:
     st.subheader("📄 3. Carregue a Planilha")
     uploaded_planilha = st.file_uploader(
         "Selecione a planilha de funcionários (.xls ou .xlsx)",
-        type=['xls', 'xlsx']
+        type=['xls', 'xlsx'],
+        key="uploader_planilha"
     )
+    # Salva conteúdo da planilha no session_state IMEDIATAMENTE após upload
     if uploaded_planilha:
+        st.session_state['planilha_bytes'] = uploaded_planilha.read()
+        st.session_state['planilha_nome'] = uploaded_planilha.name
         st.success(f"✅ Planilha '{uploaded_planilha.name}' carregada.")
 
-# --- Lógica de Execução ---
 st.markdown("---")
-tudo_pronto = arquivos_xml and uploaded_planilha
 
-if tudo_pronto:
+xml_ok = 'xml_bytes' in st.session_state and len(st.session_state['xml_bytes']) > 0
+planilha_ok = 'planilha_bytes' in st.session_state
+
+if xml_ok and planilha_ok:
     st.subheader("🚀 4. Inicie o Processamento")
 
     if st.button("⚡ Processar Arquivos Agora!", key="processar_btn", type="primary"):
         st.session_state['log_sucesso'] = []
         st.session_state['log_falha'] = []
         st.session_state['arquivo_zip'] = None
-
-        st.write(f"🔍 Debug: {len(arquivos_xml)} XML(s) recebido(s) | Planilha: {uploaded_planilha.name}")
 
         def acumular_log(status, message):
             if status == 'success':
@@ -74,8 +78,8 @@ if tudo_pronto:
         with st.spinner("Processando arquivos... Aguarde."):
             try:
                 arquivo_zip = processar_arquivos_em_memoria(
-                    arquivos_xml,
-                    uploaded_planilha,
+                    st.session_state['xml_bytes'],
+                    io.BytesIO(st.session_state['planilha_bytes']),
                     acumular_log,
                     tag_cpf=tag_cpf
                 )
@@ -93,7 +97,7 @@ else:
 
 # --- Botão de Download ---
 if st.session_state.get('arquivo_zip'):
-    nome_planilha = uploaded_planilha.name.rsplit('.', 1)[0].capitalize() if uploaded_planilha else "XMLs_Organizados"
+    nome_planilha = st.session_state.get('planilha_nome', 'XMLs_Organizados').rsplit('.', 1)[0].capitalize()
     st.download_button(
         label="📥 Baixar XMLs Organizados (.zip)",
         data=st.session_state['arquivo_zip'],
@@ -119,12 +123,10 @@ if 'log_sucesso' in st.session_state and (st.session_state.get('log_sucesso') or
             st.text_area("Detalhes:", value="\n".join(st.session_state.log_falha), height=300)
 
     if st.button("🧹 Limpar Logs"):
-        st.session_state['log_sucesso'] = []
-        st.session_state['log_falha'] = []
-        st.session_state['arquivo_zip'] = None
+        for key in ['log_sucesso', 'log_falha', 'arquivo_zip', 'xml_bytes', 'planilha_bytes', 'planilha_nome']:
+            st.session_state.pop(key, None)
         st.rerun()
 
-# --- Rodapé ---
 st.markdown("""
 <div style="text-align: center; color: grey; font-size: 12px; margin-top: 40px;">
     <hr>
