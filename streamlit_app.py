@@ -1,9 +1,22 @@
 import streamlit as st
-from processador import processar_arquivos_em_memoria
 import io
+
+# Teste de import com mensagem clara de erro
+try:
+    from processador import processar_arquivos_em_memoria
+    IMPORT_OK = True
+except ImportError as e:
+    IMPORT_OK = False
+    IMPORT_ERROR = str(e)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Processador de XMLs", page_icon="📁", layout="wide")
+
+# --- Verificação de Import ---
+if not IMPORT_OK:
+    st.error(f"❌ Erro ao importar processador.py: {IMPORT_ERROR}")
+    st.info("Verifique se o arquivo processador.py no GitHub contém a função 'processar_arquivos_em_memoria'")
+    st.stop()
 
 # --- Título e Descrição ---
 st.title("📁 Processador e Organizador de Arquivos XML")
@@ -50,6 +63,8 @@ if tudo_pronto:
         st.session_state['log_falha'] = []
         st.session_state['arquivo_zip'] = None
 
+        st.write(f"🔍 Debug: {len(arquivos_xml)} XML(s) recebido(s) | Planilha: {uploaded_planilha.name}")
+
         def acumular_log(status, message):
             if status == 'success':
                 st.session_state.log_sucesso.append(message)
@@ -65,9 +80,14 @@ if tudo_pronto:
                     tag_cpf=tag_cpf
                 )
                 st.session_state['arquivo_zip'] = arquivo_zip
-                st.success("🎉 Processo finalizado com sucesso!")
+                if arquivo_zip:
+                    st.success("🎉 Processo finalizado com sucesso!")
+                else:
+                    st.warning("⚠️ Nenhum arquivo gerado. Verifique os logs de falha.")
             except Exception as e:
-                st.error(f"Ocorreu um erro fatal: {e}")
+                import traceback
+                st.error(f"Erro fatal: {e}")
+                st.code(traceback.format_exc())
 else:
     st.info("⬆️ Carregue os arquivos XML e a planilha para habilitar o processamento.")
 
